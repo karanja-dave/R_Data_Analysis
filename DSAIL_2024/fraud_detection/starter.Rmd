@@ -1,0 +1,588 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,root.dir="..")
+```
+
+# `DSAIC HACKATHON 2024`
+
+# Fraud Detection in Electricity and Gas Consumption Challenge
+
+`This notebook serves as a starter notebook and prepared by DeKUTR club`
+
+## Introduction
+
+The Tunisian Company of Electricity and Gas (STEG) is a public entity responsible for providing electricity and gas services across Tunisia. The company has faced significant financial losses, estimated at 200 million Tunisian Dinars, due to fraudulent manipulations of consumer meters. This project aims to leverage clients' billing history to develop a solution that detects and identifies customers engaged in fraudulent activities. By implementing this system, STEG seeks to enhance revenue generation and mitigate losses caused by such fraudulent behaviors.
+
+## Data
+
+The data provided by STEG is composed of two files. The first one is comprised of client data and the second one contains billing history from 2005 to 2019.
+
+There are 2 .zip files for download, train.zip, and test.zip and a SampleSubmission.csv. In each .zip file you will find a client and invoice file.
+
+The data can download in this link: <https://drive.google.com/drive/folders/1npnp3a_-dTwGmXKffsAmybV6tDP4Gob6>
+
+## Features
+
+Variable definitions
+
+Client:
+
+-   Client_id: Unique id for client
+
+-   District: District where the client is
+
+-   Client_catg: Category client belongs to
+
+-   Region: Area where the client is
+
+-   Creation_date: Date client joined
+
+-   Target: fraud:1 , not fraud: 0
+
+Invoice data
+
+-   Client_id: Unique id for the client
+
+-   Invoice_date: Date of the invoice
+
+-   Tarif_type: Type of tax
+
+-   Counter_number:
+
+-   Counter_statue: takes up to 5 values such as working fine, not working, on hold statue, ect
+
+-   Counter_code:
+
+-   Reading_remarque: notes that the STEG agent takes during his visit to the client (e.g: If the counter shows something wrong, the agent gives a bad score)
+
+-   Counter_coefficient: An additional coefficient to be added when standard consumption is exceeded
+
+-   Consommation_level_1: Consumption_level_1
+
+-   Consommation_level_2: Consumption_level_2
+
+-   Consommation_level_3: Consumption_level_3
+
+-   Consommation_level_4: Consumption_level_4
+
+-   Old_index: Old index
+
+-   New_index: New index
+
+-   Months_number: Month number
+
+-   Counter_type: Type of counter
+
+## Step one: Import
+
+### Import libraries
+
+```{r,warning=F,message=F}
+rm(list=ls())
+setwd("../DSAIL_2024")
+library(tidymodels)
+library(readr)
+```
+
+### Import datasets
+
+#### client_train
+
+```{r}
+##load data
+client_train<-read.csv("data/train/client_train.csv")
+glimpse(client_train)
+```
+
+#### invoice_train
+
+```{r}
+invoice_train<-read.csv("data/train/invoice_train.csv")
+glimpse(invoice_train)
+```
+
+#### client_test
+
+```{r}
+client_test<-read.csv("data/test/invoice_test.csv")
+glimpse(client_test)
+```
+
+#### invoice_test
+
+```{r}
+invoice_test<-read.csv("data/test/invoice_test.csv")
+glimpse(invoice_test)
+```
+
+#### Sample Submission
+
+```{r}
+SampleSubmission <- read.csv("data/SampleSubmission.csv")
+head(SampleSubmission)
+```
+
+## step two: EDA(Exploatory Data Analysis)
+
+### Convert all the character columns to factor
+
+```{r}
+#client_train
+client_train <- client_train %>%
+  mutate_if(is.character, as.factor)
+
+skimr::skim(client_train)
+
+```
+
+```{r}
+#invoice_train
+invoice_train <- invoice_train %>%
+  mutate_if(is.character, as.factor)
+
+skimr::skim(invoice_train)
+
+```
+
+```{r}
+#client_test
+client_test <- client_test %>%
+  mutate_if(is.character, as.factor)
+
+skimr::skim(client_test)
+
+```
+
+```{r}
+#invoice_test
+invoice_test <- invoice_test %>%
+  mutate_if(is.character, as.factor)
+
+skimr::skim(invoice_test)
+
+```
+
+## Check missing data
+
+```{r}
+##client_train
+is.na(client_train) %>% colSums()
+```
+
+```{r}
+##invoice_train
+is.na(invoice_train) %>% colSums()
+```
+
+```{r}
+##client_test
+is.na(client_test) %>% colSums()
+```
+
+```{r}
+##invoice_test
+is.na(invoice_test) %>% colSums()
+```
+
+## Step three: Tidy
+
+```{r}
+aggregate_by_client_id <- function(invoice_data) {
+  # Aggregating consommation levels by client_id
+  agg_trans <- invoice_data %>%
+    group_by(client_id) %>%
+    summarise(
+      transactions_count = n(), #count num of transactions per client_id
+      consommation_level_1_mean = mean(consommation_level_1, na.rm = TRUE),
+      consommation_level_2_mean = mean(consommation_level_2, na.rm = TRUE),
+      consommation_level_3_mean = mean(consommation_level_3, na.rm = TRUE),
+      consommation_level_4_mean = mean(consommation_level_4, na.rm = TRUE)
+    )
+  }
+
+
+agg_train <- aggregate_by_client_id(invoice_train)
+
+# View the shape and the first few rows
+cat("Shape:", dim(agg_train), "\n")
+head(agg_train)
+
+```
+
+```{r}
+# Merge aggregate data with the client dataset
+train <- client_train %>%
+  left_join(agg_train, by = "client_id") 
+
+# View the result
+head(train)
+```
+
+```{r}
+# Aggregate the test set
+agg_test <- aggregate_by_client_id(invoice_test)
+
+# Merge the aggregated data with the client test dataset
+test <- client_test %>%
+  left_join(agg_test, by = "client_id")
+
+# View the result
+head(test)
+
+```
+
+```{r}
+# Get the dimensions of train and test datasets
+cat("Train dimensions:", dim(train), "\n")
+cat("Test dimensions:", dim(test), "\n")
+
+```
+
+```{r}
+# Save the client_id column for later use
+sub_client_id <- test$client_id
+# Drop columns from train dataset
+train <- train %>%
+  select(-c("client_id", "creation_date"))
+
+# Drop columns from test dataset
+test <- test %>%
+  select(-"client_id")
+
+```
+
+## View
+
+```{r}
+train <- train %>%
+         mutate(target = factor(target))
+           
+glimpse(train)
+```
+
+```{r}
+glimpse(test)
+```
+
+## DATA SPLITTING & RESAMPLING
+
+```{r}
+set.seed(1273)
+
+splits<-initial_split(train, strata = target)
+
+train_other <- training(splits)
+train_test  <- testing(splits)
+
+# training set proportions bytarget
+train_other %>% 
+  count(target) %>% 
+  mutate(prop = n/sum(n))
+```
+
+### test set proportions bytarget
+
+```{r}
+train_test  %>% 
+  count(target) %>% 
+  mutate(prop = n/sum(n))
+```
+
+## Slpiting the data into validation set
+
+```{r}
+set.seed(234)
+val_set <- validation_split(train_other, 
+                            strata = target, 
+                            prop = 0.75)
+```
+
+## A FIRST MODEL: PENALIZED LOGISTIC REGRESSION
+
+### Build the model
+
+```{r}
+lr_mod <- 
+  logistic_reg(penalty = tune(), mixture = 1) %>% 
+  set_engine("glmnet")
+
+```
+
+### Create the recipe
+
+```{r}
+lr_recipe <- 
+  recipe(target ~ ., data = train_other) %>% 
+  step_normalize(all_predictors())
+```
+
+### Create the workflow
+
+```{r}
+lr_workflow <- 
+  workflow() %>% 
+  add_model(lr_mod) %>% 
+  add_recipe(lr_recipe)
+```
+
+### Create the grid for tuning
+
+```{r}
+lr_reg_grid <- tibble(penalty = 10^seq(-4, -1, length.out = 30))
+
+lr_reg_grid %>% top_n(-5) # lowest penalty values
+```
+
+### highest penalty values
+
+```{r}
+lr_reg_grid %>% top_n(5)  
+```
+
+### Train and tune the model
+
+```{r}
+lr_res <- 
+  lr_workflow %>% 
+  tune_grid(val_set,
+            grid = lr_reg_grid,
+            control = control_grid(save_pred = TRUE),
+            metrics = metric_set(roc_auc))
+```
+
+### “best” value for this hyperparameter
+
+```{r}
+top_models <-
+  lr_res %>% 
+  show_best(metric = "roc_auc", n = 15) %>% 
+  arrange(penalty) 
+top_models
+
+```
+
+### visualize the validation set ROC curve:
+
+```{r}
+lr_best <- 
+  lr_res %>% 
+  collect_metrics() %>% 
+  arrange(penalty) %>% 
+  slice(12)
+lr_best
+```
+
+```{r}
+lr_best
+```
+
+## 
+
+```{r}
+lr_auc <- 
+  lr_res %>% 
+  collect_predictions(parameters = lr_best) %>% 
+  roc_curve(target, .pred_0) %>% 
+  mutate(model = "Logistic Regression")
+
+autoplot(lr_auc)
+```
+
+# A SECOND MODEL: TREE-BASED ENSEMBLE
+
+## Build the model and improve training time
+
+```{r}
+cores <- parallel::detectCores()
+cores
+```
+
+## rand_forest() model
+
+```{r}
+rf_mod <- 
+  rand_forest(mtry = tune(), min_n = tune(), trees = 1000) %>% 
+  set_engine("ranger", num.threads = cores) %>% 
+  set_mode("classification")
+```
+
+## Create the recipe
+
+```{r}
+rf_recipe <- 
+  recipe(target~ ., data = train_other) 
+```
+
+## workflow
+
+```{r}
+rf_workflow <- 
+  workflow() %>% 
+  add_model(rf_mod) %>% 
+  add_recipe(rf_recipe)
+```
+
+## Train and tune the model
+
+```{r}
+rf_mod
+```
+
+## 
+
+```{r}
+extract_parameter_set_dials(rf_mod)
+```
+
+The mtry hyperparameter sets the number of predictor variables that each node in the decision tree “sees” and can learn about, so it can range from 1 to the total number of features present; when mtry = all possible features, the model is the same as bagging decision trees. The min_n hyperparameter sets the minimum n to split at any node.
+
+## 25 candidate models:
+
+```{r}
+set.seed(367)
+rf_res <- 
+  rf_workflow %>% 
+  tune_grid(val_set,
+            grid = 8,
+            control = control_grid(save_pred = TRUE),
+            metrics = metric_set(roc_auc))
+```
+
+## our top 5 random forest models, out of the 25 candidates:
+
+```{r}
+rf_res %>% 
+  show_best(metric = "roc_auc")
+
+```
+
+### Plotting the results of the tuning process
+
+```{r}
+autoplot(rf_res)
+```
+
+## best model according to the ROC AUC metric. Our final tuning parameter values are:
+
+```{r}
+rf_best <- 
+  rf_res %>% 
+  select_best(metric = "roc_auc")
+rf_best
+
+```
+
+## How the models performed
+
+```{r}
+rf_res %>% 
+  collect_predictions()
+
+```
+
+```{r}
+rf_auc <- 
+  rf_res %>% 
+  collect_predictions(parameters = rf_best) %>% 
+  roc_curve(target, .pred_0) %>% 
+  mutate(model = "Random Forest")
+
+rf_auc
+```
+
+## we can compare the validation set ROC curves for our top penalized logistic regression model and random forest model
+
+```{r}
+bind_rows(rf_auc, lr_auc) %>% 
+  ggplot(aes(x = 1 - specificity, y = sensitivity, col = model)) + 
+  geom_path(lwd = 1.5, alpha = 0.8) +
+  geom_abline(lty = 3) + 
+  coord_equal() + 
+  scale_color_viridis_d(option = "plasma", end = .6)
+```
+
+## THE LAST FIT
+
+```{r}
+# the last model
+last_rf_mod <- 
+  rand_forest(mtry = 2, min_n = 27, trees = 1000) %>% 
+  set_engine("ranger", num.threads = cores, importance = "impurity") %>% 
+  set_mode("classification")
+
+# the last workflow
+last_rf_workflow <- 
+  rf_workflow %>% 
+  update_model(last_rf_mod)
+
+# the last fit
+set.seed(345)
+last_rf_fit <- 
+  last_rf_workflow %>% 
+  last_fit(splits)
+
+last_rf_fit
+```
+
+## How it performed
+
+```{r}
+last_rf_fit %>% 
+  collect_metrics()
+```
+
+## Variable importance
+
+```{r}
+library(vip)
+last_rf_fit %>% 
+  extract_fit_parsnip() %>% 
+  vip(num_features = 20)
+```
+
+## roc_curve of the final model
+
+```{r}
+last_rf_fit %>% 
+  collect_predictions() %>% 
+  roc_curve(target, .pred_0) %>% 
+  autoplot()
+```
+
+# Fiiting our model on the test data
+
+```{r}
+# Extract the fitted model from the last_rf_fit object
+last_rf_model <- extract_fit_parsnip(last_rf_fit)
+
+# Make predictions on the test set using the extracted model
+test_predictions <- predict(last_rf_model, new_data = test)
+
+head(test_predictions )
+```
+
+## Preparing the prediction for submission
+
+```{r}
+# Convert sub_client_id into a tibble for compatibility
+client_data <- tibble(client_id = as.character(sub_client_id))
+
+# Combine test_predictions with sub_client_id
+submission <- client_data %>%
+  mutate(target = as.numeric(test_predictions$.pred_class))
+
+# View the result
+head(submission)
+
+
+```
+
+## 
+
+```{r}
+write_csv(submission, "prediction_3.csv")
+```
