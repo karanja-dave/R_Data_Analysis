@@ -1,0 +1,11 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+.RDataTmp
+.RDataTmp1
+.RDataTmp2
+.RDataTmp3
+#ignore datasets, too large for git too handle, track zipped files instead
+DSAIL_2024/fraud_detection/data/test/
+DSAIL_2024/fraud_detection/data/train/
